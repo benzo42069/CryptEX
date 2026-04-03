@@ -8,7 +8,14 @@ from decimal import Decimal
 from pathlib import Path
 
 from cryptex.config_loader import ConfigLoader
-from cryptex.errors import ConfigError, ExchangeValidationError, MarketDataStaleError
+from cryptex.errors import (
+    ConfigError,
+    ExchangeValidationError,
+    MarketDataStaleError,
+    RateLimitExceededError,
+    RiskViolation,
+    WebsocketDisconnectError,
+)
 from cryptex.execution_engine import ExecutionEngine, MarketSnapshot
 
 
@@ -37,9 +44,17 @@ class SystemValidationTest(unittest.TestCase):
         with self.assertRaises(ConfigError):
             ConfigLoader().load(str(p))
 
+    def test_mode_tag_must_match(self) -> None:
+        p = self._tmp_strategy()
+        text = p.read_text().replace('"mode": "LIVE"', '"mode": "PAPER"')
+        p.write_text(text)
+        with self.assertRaises(ConfigError):
+            ConfigLoader().load(str(p))
+
     def test_paper_mode_does_not_require_live_keys(self) -> None:
         p = self._tmp_strategy()
-        text = p.read_text().replace('"LIVE"', '"PAPER"', 1)
+        text = p.read_text().replace('"run_mode": "LIVE"', '"run_mode": "PAPER"', 1)
+        text = text.replace('"mode": "LIVE"', '"mode": "PAPER"', 1)
         p.write_text(text)
         os.environ.pop("KRAKEN_API_KEY", None)
         os.environ.pop("KRAKEN_API_SECRET", None)
@@ -49,6 +64,7 @@ class SystemValidationTest(unittest.TestCase):
     def test_engine_places_valid_orders_and_persists_state(self) -> None:
         cfg = ConfigLoader().load("strategies/doge_usd_grid_live.json")
         cfg.strategy["run_mode"] = "PAPER"
+        cfg.strategy["ops"]["metrics"]["tags"]["mode"] = "PAPER"
         state_path = tempfile.NamedTemporaryFile(delete=False).name
         cfg.strategy["ops"]["state_store"]["path"] = state_path
         engine = ExecutionEngine(cfg)
@@ -61,6 +77,7 @@ class SystemValidationTest(unittest.TestCase):
     def test_stale_data_circuit_breaker(self) -> None:
         cfg = ConfigLoader().load("strategies/doge_usd_grid_live.json")
         cfg.strategy["run_mode"] = "PAPER"
+        cfg.strategy["ops"]["metrics"]["tags"]["mode"] = "PAPER"
         engine = ExecutionEngine(cfg)
         engine.ws.on_connect()
         snap = MarketSnapshot(bid=Decimal("0.2"), ask=Decimal("0.2002"), ts=time.time() - 30)
@@ -70,6 +87,7 @@ class SystemValidationTest(unittest.TestCase):
     def test_precision_rejection(self) -> None:
         cfg = ConfigLoader().load("strategies/doge_usd_grid_live.json")
         cfg.strategy["run_mode"] = "PAPER"
+        cfg.strategy["ops"]["metrics"]["tags"]["mode"] = "PAPER"
         engine = ExecutionEngine(cfg)
         engine.ws.on_connect()
         with self.assertRaises(ExchangeValidationError):
@@ -83,6 +101,43 @@ class SystemValidationTest(unittest.TestCase):
                 post_only=False,
                 market_mid=Decimal("0.2"),
             )
+
+    def test_cancel_rate_limit(self) -> None:
+        cfg = ConfigLoader().load("strategies/doge_usd_grid_live.json")
+        cfg.strategy["run_mode"] = "PAPER"
+        cfg.strategy["ops"]["metrics"]["tags"]["mode"] = "PAPER"
+        cfg.strategy["execution"]["order_limits"]["max_cancels_per_sec"] = 1
+        engine = ExecutionEngine(cfg)
+        engine.ws.on_connect()
+        snap = MarketSnapshot(bid=Decimal("0.2000"), ask=Decimal("0.2002"), ts=time.time())
+        engine.on_market_data(snap)
+        keys = list(engine.order_manager.managed.keys())[:2]
+        engine.order_manager.cancel(keys[0])
+        with self.assertRaises(RateLimitExceededError):
+            engine.order_manager.cancel(keys[1])
+
+    def test_ws_disconnect_shutdown(self) -> None:
+        cfg = ConfigLoader().load("strategies/doge_usd_grid_live.json")
+        cfg.strategy["run_mode"] = "PAPER"
+        cfg.strategy["ops"]["metrics"]["tags"]["mode"] = "PAPER"
+        engine = ExecutionEngine(cfg)
+        engine.ws.on_connect()
+        engine.ws.on_disconnect()
+        engine.ws.health.disconnect_started_at = time.time() - 10
+        snap = MarketSnapshot(bid=Decimal("0.2"), ask=Decimal("0.2002"), ts=time.time())
+        with self.assertRaises(WebsocketDisconnectError):
+            engine.on_market_data(snap)
+
+    def test_volatility_circuit_breaker(self) -> None:
+        cfg = ConfigLoader().load("strategies/doge_usd_grid_live.json")
+        cfg.strategy["run_mode"] = "PAPER"
+        cfg.strategy["ops"]["metrics"]["tags"]["mode"] = "PAPER"
+        cfg.strategy["risk"]["circuit_breakers"]["volatility_spike_bps_1m"] = 20
+        engine = ExecutionEngine(cfg)
+        engine.ws.on_connect()
+        engine.on_market_data(MarketSnapshot(bid=Decimal("0.2"), ask=Decimal("0.2002"), ts=time.time()))
+        with self.assertRaises(RiskViolation):
+            engine.on_market_data(MarketSnapshot(bid=Decimal("0.25"), ask=Decimal("0.2502"), ts=time.time()))
 
 
 if __name__ == "__main__":

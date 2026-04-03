@@ -53,9 +53,9 @@ class ConfigLoader:
             raise ConfigError(f"invalid JSON in {strategy_path}: {exc}") from exc
 
         self._assert_no_embedded_secrets(strategy)
+        self._apply_defaults(strategy)
         self._validate_schema(strategy)
         self._validate_cross_field_constraints(strategy)
-        self._apply_defaults(strategy)
 
         serialized = json.dumps(strategy, sort_keys=True, separators=(",", ":"))
         config_hash = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
@@ -81,11 +81,29 @@ class ConfigLoader:
         max_open = strategy["execution"]["order_limits"]["max_open_orders"]
         if max_open < levels * 2:
             raise ConfigError(
-                f"execution.order_limits.max_open_orders ({max_open}) must be >= 2 * grid.levels ({levels*2})"
+                f"execution.order_limits.max_open_orders ({max_open}) must be >= 2 * grid.levels ({levels * 2})"
             )
+
+        sizing = strategy["sizing"]
+        alloc = sizing["account_allocation_pct"]
+        reserve = sizing["quote_reserve_pct"]
+        if alloc + reserve > 100:
+            raise ConfigError(
+                "sizing.account_allocation_pct + sizing.quote_reserve_pct must be <= 100"
+            )
+
+        if strategy["execution"]["post_only"] and strategy["execution"]["time_in_force"] != "GTC":
+            raise ConfigError("execution.post_only=true requires execution.time_in_force='GTC'")
+
+        retry = strategy["execution"]["retry"]
+        if retry["max_retries"] > 0 and retry["retry_backoff_ms"] < 50:
+            raise ConfigError("execution.retry.retry_backoff_ms must be >= 50 when retries are enabled")
 
         if strategy["run_mode"] == "PAPER" and not strategy["market"].get("paper_trading_supported", False):
             raise ConfigError("paper mode requested but market.paper_trading_supported=false")
+
+        if strategy["ops"]["metrics"]["tags"]["mode"] != strategy["run_mode"]:
+            raise ConfigError("ops.metrics.tags.mode must match run_mode")
 
     def _apply_defaults(self, strategy: dict[str, Any]) -> None:
         strategy.setdefault("execution", {}).setdefault("retry", {})

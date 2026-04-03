@@ -1,55 +1,52 @@
 # CryptEX Full-System Validation Audit Report
 
-## Scope
-Validated and hardened the end-to-end runtime for DOGE/USD grid execution across:
-- Strategy schema and parsing
-- Config loading and reproducibility
-- Exchange order constraints
-- Order lifecycle safety
-- Websocket reliability controls
-- Persistence and restart reconciliation
-- Risk enforcement pre/post actions
-- Live vs paper isolation
-- Failure mode behavior
-
 ## Summary of Issues Found
-1. Repository lacked runtime code paths for config validation, order execution, risk checks, persistence, websocket handling, and simulation.
-2. No schema enforcement existed to prevent unknown/invalid strategy fields.
-3. No secret-separation guard existed between strategy and environment.
-4. No deterministic idempotency for order intents and no max-open/cancel throttle protections.
-5. No persistence/restart reconciliation primitives existed.
-6. No stale market data or websocket disconnect safety mechanisms existed.
+
+1. **Schema coverage gaps**: large strategy sections allowed arbitrary fields (`additionalProperties: true`), enabling silent misconfiguration.
+2. **Config/runtime mismatch**: defaults were applied after schema validation, and cross-field invariants were under-enforced.
+3. **Order safety gaps**: missing new-order throttling, weak cancel/replace safety, and no retry policy integration.
+4. **Exchange hardening gaps**: limited TIF/spot constraints, no robust idempotency on client order IDs, and weak partial-fill simulation.
+5. **Websocket/runtime resilience gaps**: missing explicit forced-shutdown check path and heartbeat tracking.
+6. **Persistence/restart gaps**: incomplete checkpoint payload for positions/checkpoint timestamp.
+7. **Risk gaps**: no volatility/price-gap circuit breaker enforcement before placement.
 
 ## Categorized Fixes
 
 ### Schema
-- Added strict strategy schema with required fields, enums, type checks, and numeric bounds.
-- Added strict no-unknown-fields validation for covered strategy sections.
+- Strengthened `schemas/strategy.schema.json` to strict coverage for all top-level sections (`sizing`, `execution`, `cost_model`, `risk`, `ops`) with explicit required fields, enums, and numeric bounds.
+- Added explicit shape for `execution.retry` and hardened constraints for risk/safety/circuit-breaker sections.
 
 ### Execution
-- Implemented `ExecutionEngine` with market snapshot processing, bounded per-cycle order creation, risk checks before order placement, panic shutdown path, and state checkpoints.
-- Added paper/live adapter split with safe routing.
+- Hardened `ExecutionEngine` initialization to wire retry/cancel-replace controls into `OrderManager`.
+- Added websocket forced shutdown gate before placement path.
+- Added pre-order circuit-breaker checks with mid-price feed into risk engine.
+- Added post-fill risk check invocation and persistent checkpoint cadence.
 
 ### Exchange Adapter
-- Added exchange rules model with enforced symbol normalization, tick rounding, lot rounding, min quantity, min notional, and post-only/TIF compatibility checks.
-- Added parsing structure for order updates, fills, partial fills metadata (status/fill/fee fields).
+- Enforced supported `time_in_force`, spot-only `reduce_only` rejection, and normalized symbol handling.
+- Added idempotent placement by `client_order_id` for both live and paper adapters.
+- Added stricter status parsing and extended paper fill model to simulate partial fills + fee handling.
 
 ### Risk
-- Added pre-order checks: stale market data, spread, imbalance, open-order limits, drawdown.
-- Added post-fill checks: drawdown, reject ratio, cancel-failure ratio.
+- Added circuit breaker implementation for:
+  - instantaneous price gap (bps)
+  - 1-minute volatility spike (bps)
+  - cooldown lockout window
+- Preserved drawdown, spread, stale data, inventory imbalance, and reject/cancel-fail ratio checks.
 
 ### Runtime
-- Added reliable websocket health model with reconnect backoff, stale detection, disconnect grace shutdown trigger.
-- Added SQLite state store for config hash, open orders, balances, and last mid.
-- Added startup reconciliation primitive to detect unknown/missing open orders.
-- Added dry-run harness and system tests.
+- Added new-order rate limiting, cancel rate limiting with explicit exceptions, retry/backoff wiring, and safer cancel/replace handling for partial fills.
+- Extended persistence checkpoint payload to include positions and checkpoint timestamp.
+- Enhanced reconcile path to support cancel-unknown or adopt-unknown behavior.
 
 ## Remaining Risks
-- Live adapter is currently a strict in-memory stub and should be replaced with production Kraken REST/WS implementation before real capital deployment.
-- Snapshot+diff order book reconstruction is not required by current strategy logic and is not implemented.
-- Rate-limit handling for real HTTP response headers (e.g., 429/503 retry-after semantics) is represented via architecture hooks but requires final API wiring.
 
-## Assumptions
-- DOGE/USD precision constraints in strategy are the authoritative source for runtime exchange constraints.
-- LIVE mode uses environment credentials (`KRAKEN_API_KEY`, `KRAKEN_API_SECRET`) and strategy files remain non-secret.
-- This repository baseline intentionally started minimal; therefore the hardened runtime is delivered as new modules.
+1. `LiveExchangeAdapter` is still a controlled in-memory adapter stub, not a production Kraken REST/WS transport.
+2. Full L2 order-book snapshot+diff reconstruction is still not required by current strategy path and not implemented.
+3. Exchange-native rate-limit headers (e.g., 429/Retry-After) and unknown 503 execution reconciliation still require real adapter transport integration.
+
+## Assumptions Made
+
+1. Strategy precision parameters are authoritative for current venue constraints.
+2. Risk equity baseline remains static in this repo (no full account PnL mark-to-market subsystem).
+3. Unknown restart orders should be canceled by default unless explicit adopt mode is chosen.

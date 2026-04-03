@@ -10,6 +10,7 @@ from .errors import MarketDataStaleError, WebsocketDisconnectError
 class WsHealth:
     connected: bool = False
     last_msg_at: float = 0.0
+    last_ping_at: float = 0.0
     disconnect_started_at: float | None = None
 
 
@@ -26,11 +27,15 @@ class ReliableWebsocket:
         now = time.time()
         self.health.connected = True
         self.health.last_msg_at = now
+        self.health.last_ping_at = now
         self.health.disconnect_started_at = None
         self.reconnect_attempts = 0
 
     def on_message(self) -> None:
         self.health.last_msg_at = time.time()
+
+    def on_ping(self) -> None:
+        self.health.last_ping_at = time.time()
 
     def on_disconnect(self) -> None:
         now = time.time()
@@ -43,10 +48,15 @@ class ReliableWebsocket:
         self.reconnect_attempts += 1
         return backoff
 
+    def should_force_shutdown(self) -> bool:
+        now = time.time()
+        if not self.health.connected and self.health.disconnect_started_at is not None:
+            return now - self.health.disconnect_started_at > self.disconnect_grace_sec
+        return False
+
     def assert_healthy(self) -> None:
         now = time.time()
         if now - self.health.last_msg_at > self.stale_after_sec:
             raise MarketDataStaleError("stale market data")
-        if not self.health.connected and self.health.disconnect_started_at is not None:
-            if now - self.health.disconnect_started_at > self.disconnect_grace_sec:
-                raise WebsocketDisconnectError("websocket disconnect grace exceeded")
+        if self.should_force_shutdown():
+            raise WebsocketDisconnectError("websocket disconnect grace exceeded")
