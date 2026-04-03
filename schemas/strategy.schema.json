@@ -30,38 +30,249 @@
       "required": ["type", "anchor", "levels", "spacing_pct", "bounds", "rounding", "dynamic_behavior"],
       "properties": {
         "type": {"type": "string", "enum": ["dynamic_geometric"]},
-        "anchor": {"type": "object", "additionalProperties": false, "required": ["source", "mode", "refresh_threshold_bps", "refresh_cooldown_sec", "min_reanchor_interval_sec"], "properties": {
-          "source": {"type": "string", "enum": ["mid_price"]},
-          "mode": {"type": "string", "enum": ["dynamic_percent"]},
-          "refresh_threshold_bps": {"type": "number", "minimum": 1},
-          "refresh_cooldown_sec": {"type": "integer", "minimum": 1},
-          "min_reanchor_interval_sec": {"type": "integer", "minimum": 1}
-        }},
+        "anchor": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "mode", "refresh_threshold_bps", "refresh_cooldown_sec", "min_reanchor_interval_sec"],
+          "properties": {
+            "source": {"type": "string", "enum": ["mid_price"]},
+            "mode": {"type": "string", "enum": ["dynamic_percent"]},
+            "refresh_threshold_bps": {"type": "number", "minimum": 1},
+            "refresh_cooldown_sec": {"type": "integer", "minimum": 1},
+            "min_reanchor_interval_sec": {"type": "integer", "minimum": 1}
+          }
+        },
         "levels": {"type": "integer", "minimum": 2, "maximum": 500},
         "spacing_pct": {"type": "number", "exclusiveMinimum": 0},
-        "bounds": {"type": "object", "additionalProperties": false, "required": ["mode", "upper_pct", "lower_pct"], "properties": {
-          "mode": {"type": "string", "enum": ["percent_from_anchor"]},
-          "upper_pct": {"type": "number", "exclusiveMinimum": 0},
-          "lower_pct": {"type": "number", "exclusiveMinimum": 0}
-        }},
-        "rounding": {"type": "object", "additionalProperties": false, "required": ["price_tick_mode", "qty_step_mode", "drop_invalid_levels", "ensure_unique_price_levels"], "properties": {
-          "price_tick_mode": {"type": "string", "enum": ["exchange_precision"]},
-          "qty_step_mode": {"type": "string", "enum": ["exchange_precision"]},
-          "drop_invalid_levels": {"type": "boolean"},
-          "ensure_unique_price_levels": {"type": "boolean"}
-        }},
-        "dynamic_behavior": {"type": "object", "additionalProperties": false, "required": ["recenter_on_drift", "drift_trigger_bps", "recenter_cooldown_sec", "max_recenters_per_hour"], "properties": {
-          "recenter_on_drift": {"type": "boolean"},
-          "drift_trigger_bps": {"type": "number", "minimum": 1},
-          "recenter_cooldown_sec": {"type": "integer", "minimum": 1},
-          "max_recenters_per_hour": {"type": "integer", "minimum": 1}
-        }}
+        "bounds": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "upper_pct", "lower_pct"],
+          "properties": {
+            "mode": {"type": "string", "enum": ["percent_from_anchor"]},
+            "upper_pct": {"type": "number", "exclusiveMinimum": 0},
+            "lower_pct": {"type": "number", "exclusiveMinimum": 0}
+          }
+        },
+        "rounding": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["price_tick_mode", "qty_step_mode", "drop_invalid_levels", "ensure_unique_price_levels"],
+          "properties": {
+            "price_tick_mode": {"type": "string", "enum": ["exchange_precision"]},
+            "qty_step_mode": {"type": "string", "enum": ["exchange_precision"]},
+            "drop_invalid_levels": {"type": "boolean"},
+            "ensure_unique_price_levels": {"type": "boolean"}
+          }
+        },
+        "dynamic_behavior": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["recenter_on_drift", "drift_trigger_bps", "recenter_cooldown_sec", "max_recenters_per_hour"],
+          "properties": {
+            "recenter_on_drift": {"type": "boolean"},
+            "drift_trigger_bps": {"type": "number", "minimum": 1},
+            "recenter_cooldown_sec": {"type": "integer", "minimum": 1},
+            "max_recenters_per_hour": {"type": "integer", "minimum": 1}
+          }
+        }
       }
     },
-    "sizing": {"type": "object", "additionalProperties": true},
-    "execution": {"type": "object", "additionalProperties": true},
-    "cost_model": {"type": "object", "additionalProperties": true},
-    "risk": {"type": "object", "additionalProperties": true},
-    "ops": {"type": "object", "additionalProperties": true}
+    "sizing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allocation_mode", "account_allocation_pct", "quote_reserve_pct", "per_level_sizing", "exposure_limits"],
+      "properties": {
+        "allocation_mode": {"type": "string", "enum": ["percent_of_account"]},
+        "account_allocation_pct": {"type": "number", "exclusiveMinimum": 0, "maximum": 100},
+        "quote_reserve_pct": {"type": "number", "minimum": 0, "maximum": 100},
+        "per_level_sizing": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["model", "base_order_notional_usd", "size_multiplier_per_level", "front_load_bias", "inventory_skew_enabled", "inventory_skew_strength", "max_inventory_skew_pct"],
+          "properties": {
+            "model": {"type": "string", "enum": ["geometric"]},
+            "base_order_notional_usd": {"type": "number", "exclusiveMinimum": 0},
+            "size_multiplier_per_level": {"type": "number", "minimum": 0.5, "maximum": 5.0},
+            "front_load_bias": {"type": "number", "minimum": 0, "maximum": 1},
+            "inventory_skew_enabled": {"type": "boolean"},
+            "inventory_skew_strength": {"type": "number", "minimum": 0, "maximum": 1},
+            "max_inventory_skew_pct": {"type": "number", "minimum": 0, "maximum": 100}
+          }
+        },
+        "exposure_limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["max_base_inventory_pct_of_alloc", "max_quote_deployed_pct_of_alloc", "max_single_order_notional_usd"],
+          "properties": {
+            "max_base_inventory_pct_of_alloc": {"type": "number", "minimum": 0, "maximum": 100},
+            "max_quote_deployed_pct_of_alloc": {"type": "number", "minimum": 0, "maximum": 100},
+            "max_single_order_notional_usd": {"type": "number", "exclusiveMinimum": 0}
+          }
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["order_type_preference", "post_only", "time_in_force", "allow_taker_cross", "slippage_tolerance_bps", "rebid_reoffer_bps", "cancel_replace", "order_limits", "fill_optimization"],
+      "properties": {
+        "order_type_preference": {"type": "string", "enum": ["hybrid"]},
+        "post_only": {"type": "boolean"},
+        "time_in_force": {"type": "string", "enum": ["GTC", "IOC", "FOK"]},
+        "allow_taker_cross": {"type": "boolean"},
+        "slippage_tolerance_bps": {"type": "number", "minimum": 0},
+        "rebid_reoffer_bps": {"type": "number", "minimum": 0},
+        "retry": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["max_retries", "retry_backoff_ms"],
+          "properties": {
+            "max_retries": {"type": "integer", "minimum": 0, "maximum": 10},
+            "retry_backoff_ms": {"type": "integer", "minimum": 10, "maximum": 10000}
+          }
+        },
+        "cancel_replace": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "min_replace_interval_ms", "max_replaces_per_min", "batch_cancel_size", "replace_on_recenter", "stale_order_timeout_sec"],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "min_replace_interval_ms": {"type": "integer", "minimum": 100},
+            "max_replaces_per_min": {"type": "integer", "minimum": 1},
+            "batch_cancel_size": {"type": "integer", "minimum": 1},
+            "replace_on_recenter": {"type": "boolean"},
+            "stale_order_timeout_sec": {"type": "integer", "minimum": 1}
+          }
+        },
+        "order_limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["max_open_orders", "max_new_orders_per_sec", "max_cancels_per_sec"],
+          "properties": {
+            "max_open_orders": {"type": "integer", "minimum": 1},
+            "max_new_orders_per_sec": {"type": "integer", "minimum": 1},
+            "max_cancels_per_sec": {"type": "integer", "minimum": 1}
+          }
+        },
+        "fill_optimization": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cross_spread_if_edge_positive", "edge_aggress_bps", "join_top_of_book", "allow_partial_fills"],
+          "properties": {
+            "cross_spread_if_edge_positive": {"type": "boolean"},
+            "edge_aggress_bps": {"type": "number", "minimum": 0},
+            "join_top_of_book": {"type": "boolean"},
+            "allow_partial_fills": {"type": "boolean"}
+          }
+        }
+      }
+    },
+    "cost_model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fees", "estimated_slippage_bps", "funding_bps", "min_edge_bps", "include_fees_in_edge_check", "include_slippage_in_edge_check"],
+      "properties": {
+        "fees": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["maker_fee_bps", "taker_fee_bps"],
+          "properties": {
+            "maker_fee_bps": {"type": "number", "minimum": 0},
+            "taker_fee_bps": {"type": "number", "minimum": 0}
+          }
+        },
+        "estimated_slippage_bps": {"type": "number", "minimum": 0},
+        "funding_bps": {"type": "number"},
+        "min_edge_bps": {"type": "number", "minimum": 0},
+        "include_fees_in_edge_check": {"type": "boolean"},
+        "include_slippage_in_edge_check": {"type": "boolean"}
+      }
+    },
+    "risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "max_strategy_drawdown_pct", "max_intraday_drawdown_pct", "max_spread_bps", "max_inventory_imbalance_pct", "max_reject_ratio_pct", "max_cancel_fail_ratio_pct", "circuit_breakers", "safety"],
+      "properties": {
+        "profile": {"type": "string", "enum": ["AGGRESSIVE", "MODERATE", "CONSERVATIVE"]},
+        "max_strategy_drawdown_pct": {"type": "number", "minimum": 0, "maximum": 100},
+        "max_intraday_drawdown_pct": {"type": "number", "minimum": 0, "maximum": 100},
+        "max_spread_bps": {"type": "number", "minimum": 0},
+        "max_inventory_imbalance_pct": {"type": "number", "minimum": 0, "maximum": 100},
+        "max_reject_ratio_pct": {"type": "number", "minimum": 0, "maximum": 100},
+        "max_cancel_fail_ratio_pct": {"type": "number", "minimum": 0, "maximum": 100},
+        "circuit_breakers": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "price_gap_bps", "volatility_spike_bps_1m", "trip_cooldown_sec"],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "price_gap_bps": {"type": "number", "minimum": 1},
+            "volatility_spike_bps_1m": {"type": "number", "minimum": 1},
+            "trip_cooldown_sec": {"type": "integer", "minimum": 1}
+          }
+        },
+        "safety": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["shutdown_on_stale_market_data", "stale_market_data_sec", "shutdown_on_ws_disconnect", "ws_disconnect_grace_sec", "panic_flatten_enabled", "panic_flatten_order_type", "panic_flatten_slippage_limit_bps"],
+          "properties": {
+            "shutdown_on_stale_market_data": {"type": "boolean"},
+            "stale_market_data_sec": {"type": "integer", "minimum": 1},
+            "shutdown_on_ws_disconnect": {"type": "boolean"},
+            "ws_disconnect_grace_sec": {"type": "integer", "minimum": 1},
+            "panic_flatten_enabled": {"type": "boolean"},
+            "panic_flatten_order_type": {"type": "string", "enum": ["market", "limit"]},
+            "panic_flatten_slippage_limit_bps": {"type": "number", "minimum": 0}
+          }
+        }
+      }
+    },
+    "ops": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state_store", "logging", "metrics"],
+      "properties": {
+        "state_store": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "path", "checkpoint_interval_sec"],
+          "properties": {
+            "type": {"type": "string", "enum": ["sqlite"]},
+            "path": {"type": "string", "minLength": 1},
+            "checkpoint_interval_sec": {"type": "integer", "minimum": 1}
+          }
+        },
+        "logging": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["level", "json", "file"],
+          "properties": {
+            "level": {"type": "string", "enum": ["DEBUG", "INFO", "WARN", "ERROR"]},
+            "json": {"type": "boolean"},
+            "file": {"type": "string", "minLength": 1}
+          }
+        },
+        "metrics": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "namespace", "tags"],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "namespace": {"type": "string", "minLength": 1},
+            "tags": {
+              "type": "object",
+              "additionalProperties": {"type": "string"},
+              "required": ["strategy_id", "symbol", "mode"],
+              "properties": {
+                "strategy_id": {"type": "string", "minLength": 1},
+                "symbol": {"type": "string", "minLength": 1},
+                "mode": {"type": "string", "enum": ["LIVE", "PAPER"]}
+              }
+            }
+          }
+        }
+      }
+    }
   }
 }

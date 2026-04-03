@@ -87,6 +87,10 @@
       "edge_aggress_bps": 8,
       "join_top_of_book": true,
       "allow_partial_fills": true
+    },
+    "retry": {
+      "max_retries": 3,
+      "retry_backoff_ms": 200
     }
   },
   "cost_model": {
