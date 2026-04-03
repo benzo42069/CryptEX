@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "strategy_id", "run_mode", "market", "grid", "sizing", "execution", "cost_model", "risk", "ops"],
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["1.0"]},
+    "strategy_id": {"type": "string", "minLength": 3},
+    "run_mode": {"type": "string", "enum": ["LIVE", "PAPER"]},
+    "market": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["venue", "type", "symbol", "base_asset", "quote_asset", "price_precision", "qty_precision", "min_qty", "min_notional_usd", "paper_trading_supported"],
+      "properties": {
+        "venue": {"type": "string", "minLength": 2},
+        "type": {"type": "string", "enum": ["SPOT"]},
+        "symbol": {"type": "string", "minLength": 3},
+        "base_asset": {"type": "string", "minLength": 2},
+        "quote_asset": {"type": "string", "minLength": 2},
+        "price_precision": {"type": "integer", "minimum": 0, "maximum": 10},
+        "qty_precision": {"type": "integer", "minimum": 0, "maximum": 10},
+        "min_qty": {"type": "number", "exclusiveMinimum": 0},
+        "min_notional_usd": {"type": "number", "exclusiveMinimum": 0},
+        "paper_trading_supported": {"type": "boolean"}
+      }
+    },
+    "grid": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "anchor", "levels", "spacing_pct", "bounds", "rounding", "dynamic_behavior"],
+      "properties": {
+        "type": {"type": "string", "enum": ["dynamic_geometric"]},
+        "anchor": {"type": "object", "additionalProperties": false, "required": ["source", "mode", "refresh_threshold_bps", "refresh_cooldown_sec", "min_reanchor_interval_sec"], "properties": {
+          "source": {"type": "string", "enum": ["mid_price"]},
+          "mode": {"type": "string", "enum": ["dynamic_percent"]},
+          "refresh_threshold_bps": {"type": "number", "minimum": 1},
+          "refresh_cooldown_sec": {"type": "integer", "minimum": 1},
+          "min_reanchor_interval_sec": {"type": "integer", "minimum": 1}
+        }},
+        "levels": {"type": "integer", "minimum": 2, "maximum": 500},
+        "spacing_pct": {"type": "number", "exclusiveMinimum": 0},
+        "bounds": {"type": "object", "additionalProperties": false, "required": ["mode", "upper_pct", "lower_pct"], "properties": {
+          "mode": {"type": "string", "enum": ["percent_from_anchor"]},
+          "upper_pct": {"type": "number", "exclusiveMinimum": 0},
+          "lower_pct": {"type": "number", "exclusiveMinimum": 0}
+        }},
+        "rounding": {"type": "object", "additionalProperties": false, "required": ["price_tick_mode", "qty_step_mode", "drop_invalid_levels", "ensure_unique_price_levels"], "properties": {
+          "price_tick_mode": {"type": "string", "enum": ["exchange_precision"]},
+          "qty_step_mode": {"type": "string", "enum": ["exchange_precision"]},
+          "drop_invalid_levels": {"type": "boolean"},
+          "ensure_unique_price_levels": {"type": "boolean"}
+        }},
+        "dynamic_behavior": {"type": "object", "additionalProperties": false, "required": ["recenter_on_drift", "drift_trigger_bps", "recenter_cooldown_sec", "max_recenters_per_hour"], "properties": {
+          "recenter_on_drift": {"type": "boolean"},
+          "drift_trigger_bps": {"type": "number", "minimum": 1},
+          "recenter_cooldown_sec": {"type": "integer", "minimum": 1},
+          "max_recenters_per_hour": {"type": "integer", "minimum": 1}
+        }}
+      }
+    },
+    "sizing": {"type": "object", "additionalProperties": true},
+    "execution": {"type": "object", "additionalProperties": true},
+    "cost_model": {"type": "object", "additionalProperties": true},
+    "risk": {"type": "object", "additionalProperties": true},
+    "ops": {"type": "object", "additionalProperties": true}
+  }
+}
