@@ -1,0 +1,148 @@
+{
+  "schema_version": "1.0",
+  "strategy_id": "doge_usd_grid_live_aggressive_v1",
+  "run_mode": "LIVE",
+  "market": {
+    "venue": "Kraken",
+    "type": "SPOT",
+    "symbol": "DOGE/USD",
+    "base_asset": "DOGE",
+    "quote_asset": "USD",
+    "price_precision": 5,
+    "qty_precision": 2,
+    "min_qty": 10.0,
+    "min_notional_usd": 10.0,
+    "paper_trading_supported": true
+  },
+  "grid": {
+    "type": "dynamic_geometric",
+    "anchor": {
+      "source": "mid_price",
+      "mode": "dynamic_percent",
+      "refresh_threshold_bps": 35,
+      "refresh_cooldown_sec": 30,
+      "min_reanchor_interval_sec": 20
+    },
+    "levels": 48,
+    "spacing_pct": 0.22,
+    "bounds": {
+      "mode": "percent_from_anchor",
+      "upper_pct": 6.0,
+      "lower_pct": 6.0
+    },
+    "rounding": {
+      "price_tick_mode": "exchange_precision",
+      "qty_step_mode": "exchange_precision",
+      "drop_invalid_levels": true,
+      "ensure_unique_price_levels": true
+    },
+    "dynamic_behavior": {
+      "recenter_on_drift": true,
+      "drift_trigger_bps": 35,
+      "recenter_cooldown_sec": 30,
+      "max_recenters_per_hour": 60
+    }
+  },
+  "sizing": {
+    "allocation_mode": "percent_of_account",
+    "account_allocation_pct": 78.0,
+    "quote_reserve_pct": 5.0,
+    "per_level_sizing": {
+      "model": "geometric",
+      "base_order_notional_usd": 20.0,
+      "size_multiplier_per_level": 1.012,
+      "front_load_bias": 0.18,
+      "inventory_skew_enabled": true,
+      "inventory_skew_strength": 0.65,
+      "max_inventory_skew_pct": 65.0
+    },
+    "exposure_limits": {
+      "max_base_inventory_pct_of_alloc": 85.0,
+      "max_quote_deployed_pct_of_alloc": 98.0,
+      "max_single_order_notional_usd": 200.0
+    }
+  },
+  "execution": {
+    "order_type_preference": "hybrid",
+    "post_only": false,
+    "time_in_force": "GTC",
+    "allow_taker_cross": true,
+    "slippage_tolerance_bps": 18,
+    "rebid_reoffer_bps": 4,
+    "cancel_replace": {
+      "enabled": true,
+      "min_replace_interval_ms": 1500,
+      "max_replaces_per_min": 120,
+      "batch_cancel_size": 10,
+      "replace_on_recenter": true,
+      "stale_order_timeout_sec": 45
+    },
+    "order_limits": {
+      "max_open_orders": 100,
+      "max_new_orders_per_sec": 8,
+      "max_cancels_per_sec": 6
+    },
+    "fill_optimization": {
+      "cross_spread_if_edge_positive": true,
+      "edge_aggress_bps": 8,
+      "join_top_of_book": true,
+      "allow_partial_fills": true
+    }
+  },
+  "cost_model": {
+    "fees": {
+      "maker_fee_bps": 16,
+      "taker_fee_bps": 26
+    },
+    "estimated_slippage_bps": 5,
+    "funding_bps": 0,
+    "min_edge_bps": 38,
+    "include_fees_in_edge_check": true,
+    "include_slippage_in_edge_check": true
+  },
+  "risk": {
+    "profile": "AGGRESSIVE",
+    "max_strategy_drawdown_pct": 22.0,
+    "max_intraday_drawdown_pct": 14.0,
+    "max_spread_bps": 120,
+    "max_inventory_imbalance_pct": 70.0,
+    "max_reject_ratio_pct": 25.0,
+    "max_cancel_fail_ratio_pct": 25.0,
+    "circuit_breakers": {
+      "enabled": true,
+      "price_gap_bps": 250,
+      "volatility_spike_bps_1m": 500,
+      "trip_cooldown_sec": 120
+    },
+    "safety": {
+      "shutdown_on_stale_market_data": true,
+      "stale_market_data_sec": 8,
+      "shutdown_on_ws_disconnect": true,
+      "ws_disconnect_grace_sec": 5,
+      "panic_flatten_enabled": true,
+      "panic_flatten_order_type": "market",
+      "panic_flatten_slippage_limit_bps": 120
+    }
+  },
+  "ops": {
+    "state_store": {
+      "type": "sqlite",
+      "path": "state/doge_usd_grid_live.sqlite",
+      "checkpoint_interval_sec": 15
+    },
+    "logging": {
+      "level": "INFO",
+      "json": true,
+      "file": "logs/doge_usd_grid_live.log"
+    },
+    "metrics": {
+      "enabled": true,
+      "namespace": "cryptex.strategy.grid",
+      "tags": {
+        "strategy_id": "doge_usd_grid_live_aggressive_v1",
+        "symbol": "DOGE/USD",
+        "mode": "LIVE"
+      }
+    }
+  }
+}
