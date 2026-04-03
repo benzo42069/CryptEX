@@ -98,9 +98,16 @@ class LiveExchangeAdapter(BaseExchangeAdapter):
         self._orders: dict[str, OrderStatus] = {}
         self._by_client: dict[str, str] = {}
         self._order_seq = 0
+        self._transient_failures_remaining = 0
+
+    def inject_transient_failures(self, count: int) -> None:
+        self._transient_failures_remaining = max(0, count)
 
     def place_order(self, req: OrderRequest) -> OrderStatus:
         req = self.validate_order(req)
+        if self._transient_failures_remaining > 0:
+            self._transient_failures_remaining -= 1
+            raise ExchangeTransientError("503 unknown order status")
         existing_id = self._by_client.get(req.client_order_id)
         if existing_id:
             return self._orders[existing_id]
@@ -127,9 +134,13 @@ class LiveExchangeAdapter(BaseExchangeAdapter):
         status = str(payload["status"]).upper()
         if status not in VALID_STATUS:
             raise ExchangeValidationError(f"unknown order status '{status}'")
+        exchange_order_id = str(payload["exchange_order_id"])
+        client_order_id = str(payload["client_order_id"])
+        if not exchange_order_id or not client_order_id:
+            raise ExchangeValidationError("order update missing IDs")
         return OrderStatus(
-            exchange_order_id=str(payload["exchange_order_id"]),
-            client_order_id=payload["client_order_id"],
+            exchange_order_id=exchange_order_id,
+            client_order_id=client_order_id,
             status=status,
             filled_qty=Decimal(str(payload.get("filled_qty", "0"))),
             avg_fill_price=Decimal(str(payload.get("avg_fill_price", "0"))),

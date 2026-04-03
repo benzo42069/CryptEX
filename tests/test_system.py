@@ -10,7 +10,9 @@ from pathlib import Path
 from cryptex.config_loader import ConfigLoader
 from cryptex.errors import (
     ConfigError,
+    ExchangeTransientError,
     ExchangeValidationError,
+    InsufficientBalanceError,
     MarketDataStaleError,
     RateLimitExceededError,
     RiskViolation,
@@ -127,6 +129,127 @@ class SystemValidationTest(unittest.TestCase):
         snap = MarketSnapshot(bid=Decimal("0.2"), ask=Decimal("0.2002"), ts=time.time())
         with self.assertRaises(WebsocketDisconnectError):
             engine.on_market_data(snap)
+
+    def test_duplicate_order_submission_is_deduped(self) -> None:
+        cfg = ConfigLoader().load("strategies/doge_usd_grid_live.json")
+        cfg.strategy["run_mode"] = "PAPER"
+        cfg.strategy["ops"]["metrics"]["tags"]["mode"] = "PAPER"
+        engine = ExecutionEngine(cfg)
+        engine.ws.on_connect()
+        managed1 = engine.order_manager.submit_limit(
+            intent_key="dup-intent",
+            symbol="DOGE/USD",
+            side="BUY",
+            price=Decimal("0.2"),
+            qty=Decimal("100"),
+            tif="GTC",
+            post_only=False,
+            market_mid=Decimal("0.2001"),
+        )
+        managed2 = engine.order_manager.submit_limit(
+            intent_key="dup-intent",
+            symbol="DOGE/USD",
+            side="BUY",
+            price=Decimal("0.2"),
+            qty=Decimal("100"),
+            tif="GTC",
+            post_only=False,
+            market_mid=Decimal("0.2001"),
+        )
+        self.assertEqual(managed1.status.exchange_order_id, managed2.status.exchange_order_id)
+
+    def test_replace_uses_new_client_order_id(self) -> None:
+        cfg = ConfigLoader().load("strategies/doge_usd_grid_live.json")
+        cfg.strategy["run_mode"] = "PAPER"
+        cfg.strategy["ops"]["metrics"]["tags"]["mode"] = "PAPER"
+        engine = ExecutionEngine(cfg)
+        engine.ws.on_connect()
+        managed = engine.order_manager.submit_limit(
+            intent_key="repl-intent",
+            symbol="DOGE/USD",
+            side="BUY",
+            price=Decimal("0.2"),
+            qty=Decimal("100"),
+            tif="GTC",
+            post_only=False,
+            market_mid=Decimal("0.2001"),
+        )
+        old_client_id = managed.order.client_order_id
+        repl = engine.order_manager.cancel_replace(
+            "repl-intent",
+            new_price=Decimal("0.1995"),
+            new_qty=Decimal("100"),
+            market_mid=Decimal("0.2001"),
+        )
+        self.assertNotEqual(old_client_id, repl.order.client_order_id)
+
+    def test_transient_503_retries_then_succeeds(self) -> None:
+        cfg = ConfigLoader().load("strategies/doge_usd_grid_live.json")
+        engine = ExecutionEngine(cfg)
+        engine.ws.on_connect()
+        engine.adapter.inject_transient_failures(2)
+        managed = engine.order_manager.submit_limit(
+            intent_key="live-transient",
+            symbol="DOGE/USD",
+            side="BUY",
+            price=Decimal("0.2"),
+            qty=Decimal("100"),
+            tif="GTC",
+            post_only=False,
+        )
+        self.assertEqual(managed.status.status, "OPEN")
+
+    def test_transient_503_exhausts_retries(self) -> None:
+        cfg = ConfigLoader().load("strategies/doge_usd_grid_live.json")
+        engine = ExecutionEngine(cfg)
+        engine.ws.on_connect()
+        engine.adapter.inject_transient_failures(10)
+        with self.assertRaises(ExchangeTransientError):
+            engine.order_manager.submit_limit(
+                intent_key="live-transient-fail",
+                symbol="DOGE/USD",
+                side="BUY",
+                price=Decimal("0.2"),
+                qty=Decimal("100"),
+                tif="GTC",
+                post_only=False,
+            )
+
+    def test_restart_restores_positions(self) -> None:
+        cfg = ConfigLoader().load("strategies/doge_usd_grid_live.json")
+        cfg.strategy["run_mode"] = "PAPER"
+        cfg.strategy["ops"]["metrics"]["tags"]["mode"] = "PAPER"
+        state_path = tempfile.NamedTemporaryFile(delete=False).name
+        cfg.strategy["ops"]["state_store"]["path"] = state_path
+
+        engine = ExecutionEngine(cfg)
+        engine.ws.on_connect()
+        engine.state.inventory_base = Decimal("50")
+        engine.state.inventory_quote = Decimal("-10")
+        engine._checkpoint(MarketSnapshot(bid=Decimal("0.2"), ask=Decimal("0.2002"), ts=time.time()))
+
+        engine2 = ExecutionEngine(cfg)
+        engine2.reconcile_on_start(cancel_unknown=True)
+        self.assertEqual(engine2.state.inventory_base, Decimal("50"))
+        self.assertEqual(engine2.state.inventory_quote, Decimal("-10"))
+
+    def test_insufficient_balance_error_bubbles(self) -> None:
+        cfg = ConfigLoader().load("strategies/doge_usd_grid_live.json")
+        cfg.strategy["run_mode"] = "PAPER"
+        cfg.strategy["ops"]["metrics"]["tags"]["mode"] = "PAPER"
+        engine = ExecutionEngine(cfg)
+        engine.ws.on_connect()
+        with self.assertRaises(InsufficientBalanceError):
+            engine.order_manager.submit_limit(
+                intent_key="insufficient",
+                symbol="DOGE/USD",
+                side="BUY",
+                price=Decimal("10"),
+                qty=Decimal("100000"),
+                tif="GTC",
+                post_only=False,
+                market_mid=Decimal("10"),
+            )
 
     def test_volatility_circuit_breaker(self) -> None:
         cfg = ConfigLoader().load("strategies/doge_usd_grid_live.json")

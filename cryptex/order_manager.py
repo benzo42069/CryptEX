@@ -16,6 +16,8 @@ class ManagedOrder:
     order: OrderRequest
     status: OrderStatus
     last_replace_ts: float = 0.0
+    replace_seq: int = 0
+    accounted_fill_qty: Decimal = Decimal("0")
 
 
 class OrderManager:
@@ -41,8 +43,8 @@ class OrderManager:
         self.cancel_timestamps: deque[float] = deque()
         self.new_order_timestamps: deque[float] = deque()
 
-    def _client_id_for_intent(self, intent_key: str) -> str:
-        h = hashlib.sha256(intent_key.encode("utf-8")).hexdigest()[:20]
+    def _client_id_for_intent(self, intent_key: str, seq: int = 0) -> str:
+        h = hashlib.sha256(f"{intent_key}:{seq}".encode("utf-8")).hexdigest()[:20]
         return f"cx-{h}"
 
     @staticmethod
@@ -148,19 +150,41 @@ class OrderManager:
                 return managed
             new_qty = min(new_qty, remaining)
 
+        side = managed.order.side
+        symbol = managed.order.symbol
+        tif = managed.order.time_in_force
+        post_only = managed.order.post_only
+        reduce_only = managed.order.reduce_only
+        managed.replace_seq += 1
+        new_client_id = self._client_id_for_intent(intent_key, managed.replace_seq)
+
         self.cancel(intent_key)
         managed.last_replace_ts = now
-        return self.submit_limit(
-            intent_key=intent_key,
-            symbol=managed.order.symbol,
-            side=managed.order.side,
+        if self.open_order_count() >= self.max_open_orders:
+            raise ExchangeValidationError("max_open_orders reached")
+        self._enforce_new_order_rate()
+
+        req = OrderRequest(
+            client_order_id=new_client_id,
+            symbol=symbol,
+            side=side,
             price=new_price,
             qty=new_qty,
-            tif=managed.order.time_in_force,
-            post_only=managed.order.post_only,
-            reduce_only=managed.order.reduce_only,
-            market_mid=market_mid,
+            order_type="limit",
+            time_in_force=tif,
+            post_only=post_only,
+            reduce_only=reduce_only,
         )
+        if post_only and market_mid is not None:
+            if (side == "BUY" and req.price >= market_mid) or (side == "SELL" and req.price <= market_mid):
+                raise ExchangeValidationError("post-only order would cross market mid")
+        status = self._place_with_retry(req, market_mid)
+
+        self.by_client_id.pop(managed.order.client_order_id, None)
+        managed.order = req
+        managed.status = status
+        self.by_client_id[req.client_order_id] = managed
+        return managed
 
     def apply_order_update(self, update: OrderStatus) -> None:
         managed = self.by_client_id.get(update.client_order_id)
@@ -194,8 +218,8 @@ class OrderManager:
                             client_order_id=order.client_order_id,
                             symbol=self.adapter.rules.symbol,
                             side="BUY",
-                            price=Decimal("0"),
-                            qty=Decimal("0"),
+                            price=order.avg_fill_price if order.avg_fill_price > 0 else self.adapter.rules.tick_size,
+                            qty=order.filled_qty if order.filled_qty > 0 else self.adapter.rules.min_qty,
                             order_type="limit",
                             time_in_force="GTC",
                             post_only=False,

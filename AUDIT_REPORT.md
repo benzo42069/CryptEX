@@ -2,51 +2,60 @@
 
 ## Summary of Issues Found
 
-1. **Schema coverage gaps**: large strategy sections allowed arbitrary fields (`additionalProperties: true`), enabling silent misconfiguration.
-2. **Config/runtime mismatch**: defaults were applied after schema validation, and cross-field invariants were under-enforced.
-3. **Order safety gaps**: missing new-order throttling, weak cancel/replace safety, and no retry policy integration.
-4. **Exchange hardening gaps**: limited TIF/spot constraints, no robust idempotency on client order IDs, and weak partial-fill simulation.
-5. **Websocket/runtime resilience gaps**: missing explicit forced-shutdown check path and heartbeat tracking.
-6. **Persistence/restart gaps**: incomplete checkpoint payload for positions/checkpoint timestamp.
-7. **Risk gaps**: no volatility/price-gap circuit breaker enforcement before placement.
+1. **Order replacement idempotency bug**: cancel/replace reused the same `client_order_id`, allowing adapters to return stale prior orders instead of creating a fresh replacement.
+2. **Inventory drift bug**: post-fill accounting re-applied already-accounted fills on every tick, causing inventory/quote drift.
+3. **Recovery gap**: restart reconciliation loaded config hash and last mid, but did not restore persisted positions.
+4. **Failure-mode coverage gap**: no deterministic way to simulate transient `503 unknown status` exchange responses for retry validation.
+5. **Cross-field config consistency gaps**: metrics tags could diverge from strategy identity/symbol without explicit hard-fail checks.
 
 ## Categorized Fixes
 
-### Schema
-- Strengthened `schemas/strategy.schema.json` to strict coverage for all top-level sections (`sizing`, `execution`, `cost_model`, `risk`, `ops`) with explicit required fields, enums, and numeric bounds.
-- Added explicit shape for `execution.retry` and hardened constraints for risk/safety/circuit-breaker sections.
+### Schema + Config
+- Preserved strict schema validation flow and strengthened cross-field config checks in loader:
+  - `ops.metrics.tags.mode == run_mode`
+  - `ops.metrics.tags.symbol == market.symbol`
+  - `ops.metrics.tags.strategy_id == strategy_id`
+  - `base_order_notional_usd <= max_single_order_notional_usd`
+- Validation remains fail-fast and actionable with explicit path+message errors.
 
-### Execution
-- Hardened `ExecutionEngine` initialization to wire retry/cancel-replace controls into `OrderManager`.
-- Added websocket forced shutdown gate before placement path.
-- Added pre-order circuit-breaker checks with mid-price feed into risk engine.
-- Added post-fill risk check invocation and persistent checkpoint cadence.
+### Execution + Order Lifecycle
+- Fixed cancel/replace to issue a **new deterministic client order id per replace sequence** while preserving per-intent management.
+- Kept duplicate-submission dedupe for same open intent.
+- Preserved rate-limit gates on both new orders and cancels during replace operations.
 
 ### Exchange Adapter
-- Enforced supported `time_in_force`, spot-only `reduce_only` rejection, and normalized symbol handling.
-- Added idempotent placement by `client_order_id` for both live and paper adapters.
-- Added stricter status parsing and extended paper fill model to simulate partial fills + fee handling.
+- Added deterministic transient-failure injector in live adapter for controlled simulation of `503 unknown order status` and retry behavior.
+- Hardened order update parsing to require valid IDs and reject malformed payloads.
 
-### Risk
-- Added circuit breaker implementation for:
-  - instantaneous price gap (bps)
-  - 1-minute volatility spike (bps)
-  - cooldown lockout window
-- Preserved drawdown, spread, stale data, inventory imbalance, and reject/cancel-fail ratio checks.
+### State + Recovery
+- Restored persisted `positions.base` and `positions.quote` during startup reconciliation.
+- Kept config-hash mismatch guard to prevent unsafe state reuse across different strategy resolutions.
 
-### Runtime
-- Added new-order rate limiting, cancel rate limiting with explicit exceptions, retry/backoff wiring, and safer cancel/replace handling for partial fills.
-- Extended persistence checkpoint payload to include positions and checkpoint timestamp.
-- Enhanced reconcile path to support cancel-unknown or adopt-unknown behavior.
+### Risk + Runtime Safety
+- Fixed post-fill accounting to process **delta-filled quantity only**, eliminating repeated inventory PnL drift.
+- Existing stale data / websocket disconnect / circuit-breaker / open-order caps stay enforced before placement.
+
+## Failure Modes Validated
+
+1. websocket disconnect shutdown trigger
+2. exchange transient 503 with retry success and retry exhaustion
+3. duplicate order submission dedupe
+4. cancel+replace with fresh client IDs
+5. stale market data rejection
+6. volatility circuit breaker trip
+7. restart restore of persisted positions
+8. invalid symbol/precision path rejection
+9. insufficient balance error propagation
+10. cancel rate-limit enforcement
 
 ## Remaining Risks
 
-1. `LiveExchangeAdapter` is still a controlled in-memory adapter stub, not a production Kraken REST/WS transport.
-2. Full L2 order-book snapshot+diff reconstruction is still not required by current strategy path and not implemented.
-3. Exchange-native rate-limit headers (e.g., 429/Retry-After) and unknown 503 execution reconciliation still require real adapter transport integration.
+1. `LiveExchangeAdapter` remains an in-memory stub and is not yet a real Kraken REST/WS transport implementation.
+2. Full exchange reconciliation for unknown/adopted orders is limited by missing side/price/qty fields in adapter `OrderStatus` model.
+3. Account equity/PnL mark-to-market is simplified; drawdown checks are functional but not tied to real balance snapshots.
 
 ## Assumptions Made
 
-1. Strategy precision parameters are authoritative for current venue constraints.
-2. Risk equity baseline remains static in this repo (no full account PnL mark-to-market subsystem).
-3. Unknown restart orders should be canceled by default unless explicit adopt mode is chosen.
+1. Strategy precision fields (`price_precision`, `qty_precision`) are authoritative for the target instrument.
+2. Default startup policy is to cancel unknown exchange orders unless explicitly adopting.
+3. Grid runtime currently prioritizes safety and bounded placement throughput over full-level immediate deployment.
