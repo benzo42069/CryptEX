@@ -5,6 +5,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Any
 
 from .errors import ExchangeTransientError, ExchangeValidationError, RateLimitExceededError
 from .exchange import BaseExchangeAdapter, LiveExchangeAdapter, OrderRequest, OrderStatus, PaperExchangeAdapter
@@ -18,6 +19,34 @@ class ManagedOrder:
     last_replace_ts: float = 0.0
     replace_seq: int = 0
     accounted_fill_qty: Decimal = Decimal("0")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "intent_key": self.intent_key,
+            "order": {
+                "client_order_id": self.order.client_order_id,
+                "symbol": self.order.symbol,
+                "side": self.order.side,
+                "price": str(self.order.price),
+                "qty": str(self.order.qty),
+                "order_type": self.order.order_type,
+                "time_in_force": self.order.time_in_force,
+                "post_only": self.order.post_only,
+                "reduce_only": self.order.reduce_only,
+            },
+            "status": {
+                "exchange_order_id": self.status.exchange_order_id,
+                "client_order_id": self.status.client_order_id,
+                "status": self.status.status,
+                "filled_qty": str(self.status.filled_qty),
+                "avg_fill_price": str(self.status.avg_fill_price),
+                "fee": str(self.status.fee),
+                "updated_at": self.status.updated_at,
+            },
+            "last_replace_ts": self.last_replace_ts,
+            "replace_seq": self.replace_seq,
+            "accounted_fill_qty": str(self.accounted_fill_qty),
+        }
 
 
 class OrderManager:
@@ -192,7 +221,53 @@ class OrderManager:
             return
         if managed.status.status == "FILLED" and update.status == "CANCELED":
             return
+        if update.filled_qty < managed.status.filled_qty:
+            update.filled_qty = managed.status.filled_qty
+        if update.avg_fill_price == Decimal("0") and managed.status.avg_fill_price > 0:
+            update.avg_fill_price = managed.status.avg_fill_price
+        if update.fee < managed.status.fee:
+            update.fee = managed.status.fee
         managed.status = update
+
+    def restore_managed(self, records: list[dict[str, Any]]) -> None:
+        for rec in records:
+            order_rec = rec.get("order", {})
+            status_rec = rec.get("status", {})
+            if not rec.get("intent_key") or not order_rec or not status_rec:
+                continue
+            try:
+                order = OrderRequest(
+                    client_order_id=str(order_rec["client_order_id"]),
+                    symbol=str(order_rec["symbol"]),
+                    side=str(order_rec["side"]),  # type: ignore[arg-type]
+                    price=Decimal(str(order_rec["price"])),
+                    qty=Decimal(str(order_rec["qty"])),
+                    order_type=str(order_rec["order_type"]),
+                    time_in_force=str(order_rec["time_in_force"]),
+                    post_only=bool(order_rec["post_only"]),
+                    reduce_only=bool(order_rec.get("reduce_only", False)),
+                )
+                status = OrderStatus(
+                    exchange_order_id=str(status_rec["exchange_order_id"]),
+                    client_order_id=str(status_rec["client_order_id"]),
+                    status=str(status_rec["status"]),
+                    filled_qty=Decimal(str(status_rec.get("filled_qty", "0"))),
+                    avg_fill_price=Decimal(str(status_rec.get("avg_fill_price", "0"))),
+                    fee=Decimal(str(status_rec.get("fee", "0"))),
+                    updated_at=float(status_rec.get("updated_at", time.time())),
+                )
+                managed = ManagedOrder(
+                    intent_key=str(rec["intent_key"]),
+                    order=order,
+                    status=status,
+                    last_replace_ts=float(rec.get("last_replace_ts", 0)),
+                    replace_seq=int(rec.get("replace_seq", 0)),
+                    accounted_fill_qty=Decimal(str(rec.get("accounted_fill_qty", "0"))),
+                )
+            except (KeyError, ValueError, ArithmeticError):
+                continue
+            self.managed[managed.intent_key] = managed
+            self.by_client_id[managed.order.client_order_id] = managed
 
     def reconcile_open_orders(self, cancel_unknown: bool = True) -> tuple[list[str], list[str]]:
         exchange_open = self.adapter.fetch_open_orders()

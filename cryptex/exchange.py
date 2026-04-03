@@ -79,11 +79,13 @@ class BaseExchangeAdapter:
             raise ExchangeValidationError("reduce_only is unsupported for spot market")
 
         req = self.normalize_request(req)
+        if req.qty <= 0:
+            raise ExchangeValidationError("qty must be > 0 after lot-size rounding")
+        if req.price <= 0:
+            raise ExchangeValidationError("price must be > 0 after tick-size rounding")
 
         if req.qty < self.rules.min_qty:
             raise ExchangeValidationError(f"qty {req.qty} below min_qty {self.rules.min_qty}")
-        if req.price <= 0:
-            raise ExchangeValidationError("price must be > 0")
         notional = req.price * req.qty
         if notional < self.rules.min_notional:
             raise ExchangeValidationError(f"notional {notional} below min_notional {self.rules.min_notional}")
@@ -120,6 +122,8 @@ class LiveExchangeAdapter(BaseExchangeAdapter):
         return st
 
     def cancel_order(self, exchange_order_id: str) -> OrderStatus:
+        if exchange_order_id not in self._orders:
+            raise ExchangeValidationError(f"unknown exchange_order_id: {exchange_order_id}")
         st = self._orders[exchange_order_id]
         if st.status in {"FILLED", "CANCELED"}:
             return st
@@ -205,6 +209,8 @@ class PaperExchangeAdapter(BaseExchangeAdapter):
         return [o for o in self._orders.values() if o.status in {"OPEN", "PARTIALLY_FILLED"}]
 
     def cancel_order(self, exchange_order_id: str) -> OrderStatus:
+        if exchange_order_id not in self._orders:
+            raise ExchangeValidationError(f"unknown exchange_order_id: {exchange_order_id}")
         st = self._orders[exchange_order_id]
         if st.status in {"OPEN", "PARTIALLY_FILLED"}:
             st.status = "CANCELED"

@@ -5,7 +5,15 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from .config_loader import ResolvedConfig
-from .errors import MarketDataStaleError, RiskViolation, WebsocketDisconnectError
+from .errors import (
+    ExchangeTransientError,
+    ExchangeValidationError,
+    InsufficientBalanceError,
+    MarketDataStaleError,
+    RateLimitExceededError,
+    RiskViolation,
+    WebsocketDisconnectError,
+)
 from .exchange import ExchangeRules, LiveExchangeAdapter, PaperExchangeAdapter
 from .order_manager import OrderManager
 from .risk_engine import RiskEngine, RiskState
@@ -78,6 +86,7 @@ class ExecutionEngine:
         persisted = self.store.load_runtime()
         if persisted["config_hash"] and persisted["config_hash"] != self.config_hash:
             raise ValueError("config hash mismatch with persisted state")
+        self.order_manager.restore_managed(persisted.get("open_orders", []))
         if persisted["last_mid"]:
             self.state.last_mid = Decimal(str(persisted["last_mid"]))
         persisted_positions = persisted.get("positions") or {}
@@ -99,9 +108,10 @@ class ExecutionEngine:
             raise MarketDataStaleError("stale market data")
 
         inv_imbalance = Decimal("0")
+        equity = self._estimate_equity(snapshot.mid)
         self.risk.check_pre_order(
             state=self.state,
-            equity=self.state.day_start_equity,
+            equity=equity,
             spread_bps=snapshot.spread_bps,
             inventory_imbalance_pct=inv_imbalance,
             open_orders=self.order_manager.open_order_count(),
@@ -121,31 +131,50 @@ class ExecutionEngine:
             sell_price = snapshot.mid * (Decimal("1") + spacing * i)
             buy_qty = per_notional / buy_price
             sell_qty = per_notional / sell_price
-            self.order_manager.submit_limit(
+            self._safe_submit(
                 intent_key=f"BUY-{i}-{buy_price:.8f}",
-                symbol=self.cfg["market"]["symbol"],
                 side="BUY",
                 price=buy_price,
                 qty=buy_qty,
-                tif=self.cfg["execution"]["time_in_force"],
-                post_only=self.cfg["execution"]["post_only"],
                 market_mid=snapshot.mid,
             )
-            self.order_manager.submit_limit(
+            self._safe_submit(
                 intent_key=f"SELL-{i}-{sell_price:.8f}",
-                symbol=self.cfg["market"]["symbol"],
                 side="SELL",
                 price=sell_price,
                 qty=sell_qty,
-                tif=self.cfg["execution"]["time_in_force"],
-                post_only=self.cfg["execution"]["post_only"],
                 market_mid=snapshot.mid,
             )
 
-        self._run_post_fill_risk_check()
+        self._run_post_fill_risk_check(snapshot.mid)
         self._checkpoint(snapshot)
 
-    def _run_post_fill_risk_check(self) -> None:
+    def _safe_submit(
+        self,
+        *,
+        intent_key: str,
+        side: str,
+        price: Decimal,
+        qty: Decimal,
+        market_mid: Decimal,
+    ) -> None:
+        try:
+            self.order_manager.submit_limit(
+                intent_key=intent_key,
+                symbol=self.cfg["market"]["symbol"],
+                side=side,
+                price=price,
+                qty=qty,
+                tif=self.cfg["execution"]["time_in_force"],
+                post_only=self.cfg["execution"]["post_only"],
+                market_mid=market_mid,
+            )
+        except (ExchangeValidationError, RateLimitExceededError, InsufficientBalanceError, ExchangeTransientError):
+            self.state.rejects += 1
+        finally:
+            self.state.total_actions += 1
+
+    def _run_post_fill_risk_check(self, mark_mid: Decimal) -> None:
         for managed in self.order_manager.managed.values():
             if managed.status.status in {"FILLED", "PARTIALLY_FILLED"} and managed.status.filled_qty > managed.accounted_fill_qty:
                 delta_fill = managed.status.filled_qty - managed.accounted_fill_qty
@@ -154,23 +183,17 @@ class ExecutionEngine:
                 notional = delta_fill * managed.status.avg_fill_price
                 self.state.inventory_quote -= notional if managed.order.side == "BUY" else -notional
                 managed.accounted_fill_qty = managed.status.filled_qty
-        self.risk.check_post_fill(state=self.state, equity=self.state.day_start_equity)
+        self.risk.check_post_fill(state=self.state, equity=self._estimate_equity(mark_mid))
+
+    def _estimate_equity(self, mid_price: Decimal) -> Decimal:
+        return self.state.start_equity + self.state.inventory_quote + (self.state.inventory_base * mid_price)
 
     def _checkpoint(self, snapshot: MarketSnapshot) -> None:
         now = time.time()
         interval = self.cfg["ops"]["state_store"]["checkpoint_interval_sec"]
         if now - self._last_checkpoint_ts < interval:
             return
-        open_orders = [
-            {
-                "intent_key": m.intent_key,
-                "client_order_id": m.order.client_order_id,
-                "exchange_order_id": m.status.exchange_order_id,
-                "status": m.status.status,
-                "filled_qty": str(m.status.filled_qty),
-            }
-            for m in self.order_manager.managed.values()
-        ]
+        open_orders = [m.to_dict() for m in self.order_manager.managed.values()]
         positions = {"base": str(self.state.inventory_base), "quote": str(self.state.inventory_quote)}
         self.store.save_runtime(
             config_hash=self.config_hash,

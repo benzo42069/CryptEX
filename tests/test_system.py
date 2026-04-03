@@ -46,6 +46,17 @@ class SystemValidationTest(unittest.TestCase):
         with self.assertRaises(ConfigError):
             ConfigLoader().load(str(p))
 
+    def test_execution_retry_required(self) -> None:
+        p = self._tmp_strategy()
+        text = p.read_text().replace(
+            '    "retry": {\n      "max_retries": 3,\n      "retry_backoff_ms": 200\n    }\n',
+            "",
+            1,
+        )
+        p.write_text(text)
+        with self.assertRaises(ConfigError):
+            ConfigLoader().load(str(p))
+
     def test_mode_tag_must_match(self) -> None:
         p = self._tmp_strategy()
         text = p.read_text().replace('"mode": "LIVE"', '"mode": "PAPER"')
@@ -233,6 +244,23 @@ class SystemValidationTest(unittest.TestCase):
         self.assertEqual(engine2.state.inventory_base, Decimal("50"))
         self.assertEqual(engine2.state.inventory_quote, Decimal("-10"))
 
+    def test_restart_restores_managed_orders(self) -> None:
+        cfg = ConfigLoader().load("strategies/doge_usd_grid_live.json")
+        cfg.strategy["run_mode"] = "PAPER"
+        cfg.strategy["ops"]["metrics"]["tags"]["mode"] = "PAPER"
+        state_path = tempfile.NamedTemporaryFile(delete=False).name
+        cfg.strategy["ops"]["state_store"]["path"] = state_path
+
+        engine = ExecutionEngine(cfg)
+        engine.ws.on_connect()
+        engine.on_market_data(MarketSnapshot(bid=Decimal("0.2"), ask=Decimal("0.2002"), ts=time.time()))
+        count_before = engine.order_manager.open_order_count()
+        engine._checkpoint(MarketSnapshot(bid=Decimal("0.2"), ask=Decimal("0.2002"), ts=time.time()))
+
+        engine2 = ExecutionEngine(cfg)
+        engine2.reconcile_on_start(cancel_unknown=True)
+        self.assertEqual(engine2.order_manager.open_order_count(), count_before)
+
     def test_insufficient_balance_error_bubbles(self) -> None:
         cfg = ConfigLoader().load("strategies/doge_usd_grid_live.json")
         cfg.strategy["run_mode"] = "PAPER"
@@ -261,6 +289,39 @@ class SystemValidationTest(unittest.TestCase):
         engine.on_market_data(MarketSnapshot(bid=Decimal("0.2"), ask=Decimal("0.2002"), ts=time.time()))
         with self.assertRaises(RiskViolation):
             engine.on_market_data(MarketSnapshot(bid=Decimal("0.25"), ask=Decimal("0.2502"), ts=time.time()))
+
+    def test_partial_fill_then_cancel_keeps_accounting_consistent(self) -> None:
+        cfg = ConfigLoader().load("strategies/doge_usd_grid_live.json")
+        cfg.strategy["run_mode"] = "PAPER"
+        cfg.strategy["ops"]["metrics"]["tags"]["mode"] = "PAPER"
+        engine = ExecutionEngine(cfg)
+        engine.ws.on_connect()
+        managed = engine.order_manager.submit_limit(
+            intent_key="pf-cancel",
+            symbol="DOGE/USD",
+            side="BUY",
+            price=Decimal("0.2"),
+            qty=Decimal("100"),
+            tif="GTC",
+            post_only=False,
+            market_mid=Decimal("0.20005"),
+        )
+        engine._run_post_fill_risk_check(Decimal("0.20005"))
+        base_after_fill = engine.state.inventory_base
+        engine.order_manager.cancel("pf-cancel")
+        engine._run_post_fill_risk_check(Decimal("0.20005"))
+        self.assertEqual(engine.state.inventory_base, base_after_fill)
+        self.assertIn(managed.status.status, {"PARTIALLY_FILLED", "CANCELED"})
+
+    def test_ws_heartbeat_stale(self) -> None:
+        cfg = ConfigLoader().load("strategies/doge_usd_grid_live.json")
+        cfg.strategy["run_mode"] = "PAPER"
+        cfg.strategy["ops"]["metrics"]["tags"]["mode"] = "PAPER"
+        engine = ExecutionEngine(cfg)
+        engine.ws.on_connect()
+        engine.ws.health.last_ping_at = time.time() - 30
+        with self.assertRaises(MarketDataStaleError):
+            engine.on_market_data(MarketSnapshot(bid=Decimal("0.2"), ask=Decimal("0.2002"), ts=time.time()))
 
 
 if __name__ == "__main__":

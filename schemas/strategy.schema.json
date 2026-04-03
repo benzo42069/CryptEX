@@ -115,7 +115,7 @@
     "execution": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["order_type_preference", "post_only", "time_in_force", "allow_taker_cross", "slippage_tolerance_bps", "rebid_reoffer_bps", "cancel_replace", "order_limits", "fill_optimization"],
+      "required": ["order_type_preference", "post_only", "time_in_force", "allow_taker_cross", "slippage_tolerance_bps", "rebid_reoffer_bps", "cancel_replace", "order_limits", "fill_optimization", "retry"],
       "properties": {
         "order_type_preference": {"type": "string", "enum": ["hybrid"]},
         "post_only": {"type": "boolean"},

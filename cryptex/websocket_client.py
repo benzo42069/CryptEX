@@ -43,6 +43,10 @@ class ReliableWebsocket:
         if self.health.disconnect_started_at is None:
             self.health.disconnect_started_at = now
 
+    def mark_reconnect_attempt(self) -> float:
+        self.on_disconnect()
+        return self.next_backoff()
+
     def next_backoff(self) -> float:
         backoff = min(self.max_backoff_sec, self.base_backoff_sec * (2 ** self.reconnect_attempts))
         self.reconnect_attempts += 1
@@ -58,5 +62,7 @@ class ReliableWebsocket:
         now = time.time()
         if now - self.health.last_msg_at > self.stale_after_sec:
             raise MarketDataStaleError("stale market data")
+        if self.health.connected and now - self.health.last_ping_at > self.stale_after_sec:
+            raise MarketDataStaleError("websocket heartbeat stale")
         if self.should_force_shutdown():
             raise WebsocketDisconnectError("websocket disconnect grace exceeded")
