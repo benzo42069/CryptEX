@@ -104,6 +104,15 @@ class ConfigLoader:
 
         if strategy["ops"]["metrics"]["tags"]["mode"] != strategy["run_mode"]:
             raise ConfigError("ops.metrics.tags.mode must match run_mode")
+        if strategy["ops"]["metrics"]["tags"]["symbol"] != strategy["market"]["symbol"]:
+            raise ConfigError("ops.metrics.tags.symbol must match market.symbol")
+        if strategy["ops"]["metrics"]["tags"]["strategy_id"] != strategy["strategy_id"]:
+            raise ConfigError("ops.metrics.tags.strategy_id must match strategy_id")
+
+        max_single = strategy["sizing"]["exposure_limits"]["max_single_order_notional_usd"]
+        base_notional = strategy["sizing"]["per_level_sizing"]["base_order_notional_usd"]
+        if base_notional > max_single:
+            raise ConfigError("sizing.per_level_sizing.base_order_notional_usd must be <= sizing.exposure_limits.max_single_order_notional_usd")
 
     def _apply_defaults(self, strategy: dict[str, Any]) -> None:
         strategy.setdefault("execution", {}).setdefault("retry", {})

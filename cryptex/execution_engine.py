@@ -80,6 +80,11 @@ class ExecutionEngine:
             raise ValueError("config hash mismatch with persisted state")
         if persisted["last_mid"]:
             self.state.last_mid = Decimal(str(persisted["last_mid"]))
+        persisted_positions = persisted.get("positions") or {}
+        if "base" in persisted_positions:
+            self.state.inventory_base = Decimal(str(persisted_positions["base"]))
+        if "quote" in persisted_positions:
+            self.state.inventory_quote = Decimal(str(persisted_positions["quote"]))
         return self.order_manager.reconcile_open_orders(cancel_unknown=cancel_unknown)
 
     def on_market_data(self, snapshot: MarketSnapshot) -> None:
@@ -142,11 +147,13 @@ class ExecutionEngine:
 
     def _run_post_fill_risk_check(self) -> None:
         for managed in self.order_manager.managed.values():
-            if managed.status.status in {"FILLED", "PARTIALLY_FILLED"} and managed.status.filled_qty > 0:
-                signed = managed.status.filled_qty if managed.order.side == "BUY" else -managed.status.filled_qty
+            if managed.status.status in {"FILLED", "PARTIALLY_FILLED"} and managed.status.filled_qty > managed.accounted_fill_qty:
+                delta_fill = managed.status.filled_qty - managed.accounted_fill_qty
+                signed = delta_fill if managed.order.side == "BUY" else -delta_fill
                 self.state.inventory_base += signed
-                notional = managed.status.filled_qty * managed.status.avg_fill_price
+                notional = delta_fill * managed.status.avg_fill_price
                 self.state.inventory_quote -= notional if managed.order.side == "BUY" else -notional
+                managed.accounted_fill_qty = managed.status.filled_qty
         self.risk.check_post_fill(state=self.state, equity=self.state.day_start_equity)
 
     def _checkpoint(self, snapshot: MarketSnapshot) -> None:
