@@ -35,6 +35,9 @@ class ResolvedConfig:
             "config_hash": self.config_hash,
         }
 
+    def redacted_json(self) -> str:
+        return json.dumps(self.redacted_dict(), sort_keys=True, indent=2)
+
 
 class ConfigLoader:
     def __init__(self, schema_path: str = "schemas/strategy.schema.json") -> None:
